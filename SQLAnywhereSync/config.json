@@ -5,12 +5,16 @@
     "password": "(*$^)"
   },
   "api": {
-    "base_url": "http://127.0.0.1:8000/api",  
-    "upload_endpoint": "/upload-users/",      
-    "timeout": 30
+    "base_url": "http://127.0.0.1:8000/api",
+    "upload_endpoints": {
+      "users": "/upload-users/",
+      "misel": "/upload-misel/"
     },
+    "timeout": 30
+  },
   "settings": {
-    "table_name": "acc_users",
+    "table_name_users": "acc_users",
+    "table_name_misel": "misel",
     "batch_size": 1000,
     "log_level": "INFO"
   }

@@ -1,0 +1,15 @@
+2025-07-24 16:17:26,677 - INFO - === SQL Anywhere Sync Tool Started ===
+2025-07-24 16:17:26,680 - INFO - Connecting to database DSN: GOTASK1
+2025-07-24 16:17:26,907 - INFO - ✅ Successfully connected to database
+2025-07-24 16:17:26,908 - INFO - Executing query: SELECT id, pass, role, accountcode FROM acc_users
+2025-07-24 16:17:26,909 - INFO - ✅ Successfully fetched 11 user records
+2025-07-24 16:17:26,910 - INFO - Validated 11 out of 11 users
+2025-07-24 16:17:26,911 - INFO - Uploading 11 users to API: http://127.0.0.1:8000/api/upload-users/
+2025-07-24 16:17:27,693 - INFO - ✅ Successfully uploaded users to API
+2025-07-24 16:17:27,708 - INFO - Executing query: SELECT firm_name, address, phones, mobile, address1, address2, address3, pagers, tinno FROM misel
+2025-07-24 16:17:27,711 - INFO - ✅ Successfully fetched 1 misel records
+2025-07-24 16:17:27,712 - INFO - Validated 1 out of 1 misel entries
+2025-07-24 16:17:27,713 - INFO - Uploading 1 misel records to API: http://127.0.0.1:8000/api/upload-misel/
+2025-07-24 16:17:28,173 - INFO - ✅ Successfully uploaded misel to API
+2025-07-24 16:17:28,176 - INFO - Database connection closed
+2025-07-24 16:17:28,176 - INFO - === Sync completed successfully ===
