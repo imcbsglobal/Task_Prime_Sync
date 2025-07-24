@@ -1,0 +1,10 @@
+2025-07-24 11:44:20,574 - INFO - === SQL Anywhere Sync Tool Started ===
+2025-07-24 11:44:20,576 - INFO - Connecting to database DSN: GOTASK1
+2025-07-24 11:44:20,787 - INFO - ✅ Successfully connected to database
+2025-07-24 11:44:20,787 - INFO - Executing query: SELECT id, pass, role, accountcode FROM acc_users
+2025-07-24 11:44:20,790 - INFO - ✅ Successfully fetched 11 user records
+2025-07-24 11:44:20,791 - INFO - Validated 11 out of 11 users
+2025-07-24 11:44:20,791 - INFO - Uploading 11 users to API: http://127.0.0.1:8000/api/upload-users/
+2025-07-24 11:44:21,744 - INFO - ✅ Successfully uploaded users to API
+2025-07-24 11:44:21,747 - INFO - Database connection closed
+2025-07-24 11:44:21,747 - INFO - === Sync completed successfully ===

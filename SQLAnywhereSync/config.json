@@ -1,0 +1,17 @@
+{
+  "database": {
+    "dsn": "GOTASK1",
+    "username": "DBA",
+    "password": "(*$^)"
+  },
+  "api": {
+    "base_url": "http://127.0.0.1:8000/api",  
+    "upload_endpoint": "/upload-users/",      
+    "timeout": 30
+    },
+  "settings": {
+    "table_name": "acc_users",
+    "batch_size": 1000,
+    "log_level": "INFO"
+  }
+}

@@ -1,0 +1,13 @@
+2025-07-24 11:42:07,480 - INFO - === SQL Anywhere Sync Tool Started ===
+2025-07-24 11:42:07,504 - INFO - Connecting to database DSN: GOTASK1
+2025-07-24 11:42:07,776 - INFO - ✅ Successfully connected to database
+2025-07-24 11:42:07,776 - INFO - Executing query: SELECT id, pass, role, accountcode FROM acc_users
+2025-07-24 11:42:07,780 - INFO - ✅ Successfully fetched 11 user records
+2025-07-24 11:42:07,781 - INFO - Validated 11 out of 11 users
+2025-07-24 11:42:07,782 - INFO - Uploading 11 users to API: http://127.0.0.1:8000/api/upload-users/
+2025-07-24 11:42:09,866 - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001B461A63B30>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')': /api/upload-users/
+2025-07-24 11:42:13,916 - WARNING - Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001B461B49130>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')': /api/upload-users/
+2025-07-24 11:42:19,964 - WARNING - Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001B461B49340>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')': /api/upload-users/
+2025-07-24 11:42:22,038 - ERROR - ❌ Failed to connect to API
+2025-07-24 11:42:22,059 - INFO - Database connection closed
+2025-07-24 11:42:22,060 - INFO - === Sync failed ===
