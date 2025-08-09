@@ -1,6 +1,6 @@
 {
   "database": {
-    "dsn": "GOTASK1",
+    "dsn": "safa",
     "username": "DBA",
     "password": "(*$^)"
   },
@@ -11,7 +11,8 @@
       "misel": "/upload-misel/",
       "acc_master": "/upload-acc-master/",
       "acc_ledgers": "/upload-acc-ledgers/",
-      "acc_invmast": "/upload-acc-invmast/"
+      "acc_invmast": "/upload-acc-invmast/",
+      "cashandbankaccmaster": "/upload-cashandbankaccmaster/"
     },
     "timeout": 30
   },

@@ -128,8 +128,6 @@ class DatabaseConnector:
             logging.error(f"❌ Failed fetching acc_master: {e}")
             return None
 
-    # === [UPDATED PART ONLY] ===
-
     def fetch_acc_ledgers(self) -> Optional[List[Dict[str, Any]]]:
         try:
             cursor = self.connection.cursor()
@@ -178,8 +176,6 @@ class DatabaseConnector:
             logging.error(f"❌ Critical error in fetch_acc_ledgers: {e}")
             logging.error(f"{traceback.format_exc()}")
             return None
-
-
 
     def fetch_acc_invmast(self) -> Optional[List[Dict[str, Any]]]:
         try:
@@ -256,6 +252,22 @@ class DatabaseConnector:
             
         except Exception as e:
             logging.error(f"❌ Failed fetching acc_invmast: {e}")
+            return None
+
+    def fetch_cashandbankaccmaster(self) -> Optional[List[Dict[str, Any]]]:
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                SELECT code, name, super_code, opening_balance, opening_date, debit, credit
+                FROM acc_master
+                WHERE super_code IN ('CASH', 'BANK')
+            """
+            logging.info(f"Executing query: {query}")
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logging.error(f"❌ Failed fetching cashandbankaccmaster: {e}")
             return None
 
     def close(self):
@@ -381,6 +393,20 @@ class WebAPIClient:
                 return False
         except Exception as e:
             logging.error(f"❌ Exception in upload_acc_invmast: {e}")
+            return False
+
+    def upload_cashandbankaccmaster(self, cashandbankaccmaster: List[Dict[str, Any]]) -> bool:
+        url = f"{self.config.api_base_url}{self.config.upload_endpoints['cashandbankaccmaster']}?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=cashandbankaccmaster, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ CashAndBankAccMaster uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_cashandbankaccmaster: {e}")
             return False
 
 
@@ -568,6 +594,23 @@ class SyncTool:
             })
         return valid
 
+    def validate_cashandbankaccmaster_data(self, cashandbankaccmaster: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        valid = []
+        for i, m in enumerate(cashandbankaccmaster):
+            if not m.get('code'):
+                continue
+            valid.append({
+                'code': str(m['code']).strip(),
+                'name': m.get('name', ''),
+                'super_code': m.get('super_code', ''),
+                'opening_balance': float(m['opening_balance']) if m.get('opening_balance') else None,
+                'opening_date': m['opening_date'].strftime('%Y-%m-%d') if m.get('opening_date') else None,
+                'debit': float(m['debit']) if m.get('debit') else None,
+                'credit': float(m['credit']) if m.get('credit') else None,
+                'client_id': self.config.client_id  # Add client_id to each record
+            })
+        return valid
+
     def run(self) -> bool:
         print("🔄 Starting SQL Anywhere to Web API sync...")
         if not self.initialize():
@@ -635,6 +678,16 @@ class SyncTool:
         else:
             print("❌ Failed to fetch acc_invmast data")
 
+        # Sync CashAndBankAccMaster
+        cashandbankaccmaster = self.db_connector.fetch_cashandbankaccmaster()
+        if cashandbankaccmaster:
+            print(f"📊 Found {len(cashandbankaccmaster)} cashandbankaccmaster entries")
+            valid_cashandbankaccmaster = self.validate_cashandbankaccmaster_data(cashandbankaccmaster)
+            if valid_cashandbankaccmaster:
+                self.api_client.upload_cashandbankaccmaster(valid_cashandbankaccmaster)
+            else:
+                print("❌ No valid cashandbankaccmaster data")
+
         self.db_connector.close()
         return True
 
@@ -658,7 +711,6 @@ def main():
     sync_tool = SyncTool()
     sync_tool.run_interactive()
     
-
 
 if __name__ == "__main__":
     main()
