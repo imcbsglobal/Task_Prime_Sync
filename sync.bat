@@ -10,7 +10,7 @@ echo Starting synchronization process...
 echo.
 
 REM Check if executable exists
-if not exist "SyncTool.exe" (
+if not exist "sync.exe" (
     echo ERROR: SyncTool.exe not found!
     echo Please ensure all files are in the same directory.
     echo.

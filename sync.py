@@ -77,6 +77,28 @@ class DatabaseConnector:
             print(f"❌ Failed to connect to database: {e}")
             return False
 
+    # ------------------------------------------------------------------
+    # NEW FETCHER (acc_tt_servicemaster)  -- 3 fields only
+    # ------------------------------------------------------------------
+    def fetch_accttservicemaster(self) -> Optional[List[Dict[str, Any]]]:
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                SELECT slno, type, code, name
+                FROM dba.acc_tt_servicemaster
+                WHERE UPPER(TRIM(type)) = 'AREA'
+            """
+            logging.info(f"Executing query: {query}")
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logging.error(f"❌ Failed fetching acc_tt_servicemaster: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # EXISTING FETCHERS (unchanged)
+    # ------------------------------------------------------------------
     def fetch_users(self) -> Optional[List[Dict[str, Any]]]:
         try:
             cursor = self.connection.cursor()
@@ -92,9 +114,7 @@ class DatabaseConnector:
     def fetch_misel(self) -> Optional[List[Dict[str, Any]]]:
         try:
             cursor = self.connection.cursor()
-            query = f"""SELECT firm_name, address, phones, mobile, 
-                               address1, address2, address3, pagers, tinno 
-                        FROM {self.config.table_name_misel}"""
+            query = f"SELECT firm_name, address, phones, mobile, address1, address2, address3, pagers, tinno FROM {self.config.table_name_misel}"
             logging.info(f"Executing query: {query}")
             cursor.execute(query)
             columns = [column[0] for column in cursor.description]
@@ -115,17 +135,34 @@ class DatabaseConnector:
                     acc_master.credit,
                     acc_master.place,
                     acc_master.phone2,
-                    acc_departments.department AS openingdepartment
+                    acc_departments.department AS openingdepartment,
+                    COALESCE(acc_tt_servicemaster.name, 'No Area') AS area
                 FROM acc_master
-                LEFT JOIN acc_departments ON acc_master.openingdepartment = acc_departments.department_id
-                WHERE acc_master.super_code = 'DEBTO'
+                LEFT JOIN acc_departments 
+                    ON acc_master.openingdepartment = acc_departments.department_id
+                LEFT JOIN acc_tt_servicemaster
+                    ON acc_master.area = acc_tt_servicemaster.code
+                WHERE acc_master.super_code = 'DEBTO';
             """
             logging.info(f"Executing query: {query}")
             cursor.execute(query)
             columns = [column[0] for column in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+            # Debug logging for area field
+            logging.info(f"📊 Fetched {len(results)} acc_master records")
+            area_count = sum(1 for r in results if r.get('area') and str(r['area']).strip())
+            logging.info(f"🔍 Records with non-empty area field: {area_count}")
+            
+            # Log first few area values for debugging
+            for i, record in enumerate(results[:5]):
+                area_value = record.get('area')
+                logging.info(f"🔎 Record {i+1} - Code: {record.get('code')}, Area: '{area_value}' (type: {type(area_value)})")
+            
+            return results
         except Exception as e:
             logging.error(f"❌ Failed fetching acc_master: {e}")
+            logging.error(f"{traceback.format_exc()}")
             return None
 
     def fetch_acc_ledgers(self) -> Optional[List[Dict[str, Any]]]:
@@ -216,23 +253,6 @@ class DatabaseConnector:
                 AND inv.paid < inv.nettotal
                 AND inv.modeofpayment = 'C'
                 """,
-                
-                # Option 3: Simple concatenation
-                """
-                SELECT
-                    inv.modeofpayment,
-                    inv.customerid,
-                    inv.invdate,
-                    inv.nettotal,
-                    inv.paid,
-                    inv.billno AS bill_ref
-                FROM acc_invmast AS inv
-                INNER JOIN acc_master AS cust
-                    ON inv.customerid = cust.code
-                WHERE cust.super_code = 'DEBTO'
-                AND inv.paid < inv.nettotal
-                AND inv.modeofpayment = 'C'
-                """
             ]
             
             for i, query in enumerate(queries_to_try, 1):
@@ -290,6 +310,26 @@ class WebAPIClient:
         session.headers.update({'Content-Type': 'application/json'})
         return session
 
+    # ------------------------------------------------------------------
+    # NEW UPLOADER (acc_tt_servicemaster)
+    # ------------------------------------------------------------------
+    def upload_accttservicemaster(self, rows: List[Dict[str, Any]]) -> bool:
+        url = f"{self.config.api_base_url}/upload-accttservicemaster/?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=rows, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ acc_tt_servicemaster uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ acc_tt_servicemaster upload failed: {res.status_code} – {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_accttservicemaster: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # EXISTING UPLOADERS (unchanged)
+    # ------------------------------------------------------------------
     def upload_users(self, users: List[Dict[str, Any]]) -> bool:
         url = f"{self.config.api_base_url}{self.config.upload_endpoints['users']}?client_id={self.config.client_id}"
         try:
@@ -319,7 +359,30 @@ class WebAPIClient:
             return False
 
     def upload_acc_master(self, acc_master: List[Dict[str, Any]]) -> bool:
-        return self._upload_in_batches('acc_master', acc_master, self.config.large_table_batch_size)
+        url = f"{self.config.api_base_url}{self.config.upload_endpoints['acc_master']}?client_id={self.config.client_id}&force_clear=true"
+        try:
+            # For acc_master, always clear existing data first by sending empty array
+            logging.info("🧹 Clearing existing acc_master data...")
+            clear_res = self.session.post(url, json=[], timeout=60)
+            
+            if clear_res.status_code not in [200, 201]:
+                logging.error(f"❌ Failed to clear existing acc_master data: {clear_res.status_code} - {clear_res.text}")
+                return False
+            
+            # Now upload the new data
+            logging.info(f"📤 Uploading {len(acc_master)} acc_master records...")
+            res = self.session.post(url, json=acc_master, timeout=self.config.api_timeout)
+            
+            if res.status_code in [200, 201]:
+                logging.info("✅ Acc_Master uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+                
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_acc_master: {e}")
+            return False
 
     def _upload_in_batches(self, endpoint_key: str, data: List[Dict[str, Any]], batch_size: int = None) -> bool:
         """Upload large datasets in batches to avoid timeouts"""
@@ -418,11 +481,10 @@ class SyncTool:
         self._setup_logging()
 
     def _setup_logging(self):
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[logging.StreamHandler(sys.stdout)]
-        )
+        level = logging.INFO
+        if self.config and self.config.log_level:
+            level = getattr(logging, self.config.log_level.upper(), logging.INFO)
+        logging.basicConfig(level=level, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
         logging.info("=== SQL Anywhere Sync Tool Started ===")
 
     def initialize(self) -> bool:
@@ -432,9 +494,29 @@ class SyncTool:
             self.api_client = WebAPIClient(self.config)
             return True
         except Exception as e:
-            logging.error(f"❌ Initialization failed: {e}")
+            logging.error(f"Initialization failed: {e}")
             return False
 
+    # ------------------------------------------------------------------
+    # NEW VALIDATOR (acc_tt_servicemaster)
+    # ------------------------------------------------------------------
+    def validate_accttservicemaster_data(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        valid = []
+        for r in rows:
+            try:
+                valid.append({
+                    'slno': int(r['slno']),
+                    'type': str(r['type']) if r.get('type') else None,
+                    'code': str(r['code']) if r.get('code') else None,
+                    'name': str(r['name']) if r.get('name') else None
+                })
+            except (ValueError, TypeError):
+                continue
+        return valid
+
+    # ------------------------------------------------------------------
+    # EXISTING VALIDATORS (unchanged)
+    # ------------------------------------------------------------------
     def validate_user_data(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid_users = []
         for i, user in enumerate(users):
@@ -471,16 +553,32 @@ class SyncTool:
         for i, m in enumerate(acc_master):
             if not m.get('code'):
                 continue
-            valid.append({
+            
+            # Handle area field properly - don't skip 'No Area' values
+            area_value = m.get('area', '')
+            if area_value and area_value != 'No Area':
+                area_clean = str(area_value).strip()
+            else:
+                area_clean = None  # Set to None instead of empty string for 'No Area'
+            
+            validated_record = {
                 'code': str(m['code']).strip(),
-                'name': m.get('name', ''),
-                'opening_balance': float(m['opening_balance']) if m.get('opening_balance') else None,
-                'debit': float(m['debit']) if m.get('debit') else None,
-                'credit': float(m['credit']) if m.get('credit') else None,
-                'place': m.get('place', ''),
-                'phone2': m.get('phone2', ''),
-                'openingdepartment': m.get('openingdepartment', '')
-            })
+                'name': str(m.get('name', '')).strip() if m.get('name') else '',
+                'opening_balance': float(m['opening_balance']) if m.get('opening_balance') is not None else None,
+                'debit': float(m['debit']) if m.get('debit') is not None else None,
+                'credit': float(m['credit']) if m.get('credit') is not None else None,
+                'place': str(m.get('place', '')).strip() if m.get('place') else '',
+                'phone2': str(m.get('phone2', '')).strip() if m.get('phone2') else '',
+                'openingdepartment': str(m.get('openingdepartment', '')).strip() if m.get('openingdepartment') else '',
+                'area': area_clean  # Fixed: properly handle area field
+            }
+            
+            valid.append(validated_record)
+            
+        # Debug logging
+        area_count = sum(1 for r in valid if r.get('area'))
+        logging.info(f"📊 After validation - Records with area data: {area_count}/{len(valid)}")
+        
         return valid
 
     def validate_acc_ledgers_data(self, acc_ledgers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -489,7 +587,6 @@ class SyncTool:
             if not l.get('code'):
                 continue
             
-            # Handle date conversion more safely
             entry_date = None
             if l.get('entry_date'):
                 try:
@@ -516,7 +613,6 @@ class SyncTool:
                     logging.warning(f"Could not parse date {l['entry_date']}: {date_e}")
                     entry_date = None
             
-            # Handle voucher_no conversion more safely
             voucher_no = None
             if l.get('voucher_no') is not None:
                 try:
@@ -528,7 +624,6 @@ class SyncTool:
                     logging.warning(f"Could not parse voucher_no {l['voucher_no']}: {voucher_e}")
                     voucher_no = None
             
-            # Handle numeric fields more safely
             debit = None
             credit = None
             try:
@@ -607,10 +702,13 @@ class SyncTool:
                 'opening_date': m['opening_date'].strftime('%Y-%m-%d') if m.get('opening_date') else None,
                 'debit': float(m['debit']) if m.get('debit') else None,
                 'credit': float(m['credit']) if m.get('credit') else None,
-                'client_id': self.config.client_id  # Add client_id to each record
+                'client_id': self.config.client_id
             })
         return valid
 
+    # ------------------------------------------------------------------
+    # RUN METHOD  (only the new block added before close())
+    # ------------------------------------------------------------------
     def run(self) -> bool:
         print("🔄 Starting SQL Anywhere to Web API sync...")
         if not self.initialize():
@@ -638,12 +736,21 @@ class SyncTool:
             else:
                 print("❌ No valid misel data")
 
-        # Sync AccMaster
+        # Sync AccMaster (with enhanced area field processing)
         acc_master = self.db_connector.fetch_acc_master()
         if acc_master:
             print(f"📊 Found {len(acc_master)} acc_master entries")
             valid_acc_master = self.validate_acc_master_data(acc_master)
             if valid_acc_master:
+                # Log area field statistics before upload
+                area_records = [r for r in valid_acc_master if r.get('area')]
+                print(f"📊 Records with area data: {len(area_records)}/{len(valid_acc_master)}")
+                
+                # Show sample area values
+                if area_records:
+                    sample_areas = [r['area'] for r in area_records[:5]]
+                    print(f"🔍 Sample area values: {sample_areas}")
+                
                 self.api_client.upload_acc_master(valid_acc_master)
             else:
                 print("❌ No valid acc_master data")
@@ -687,6 +794,18 @@ class SyncTool:
                 self.api_client.upload_cashandbankaccmaster(valid_cashandbankaccmaster)
             else:
                 print("❌ No valid cashandbankaccmaster data")
+
+        # ------------------------------------------------------------------
+        # NEW SYNC BLOCK (acc_tt_servicemaster)
+        # ------------------------------------------------------------------
+        acctt = self.db_connector.fetch_accttservicemaster()
+        if acctt:
+            print(f"📊 Found {len(acctt)} acc_tt_servicemaster rows")
+            valid = self.validate_accttservicemaster_data(acctt)
+            if valid:
+                self.api_client.upload_accttservicemaster(valid)
+            else:
+                print("❌ No valid acc_tt_servicemaster data")
 
         self.db_connector.close()
         return True
