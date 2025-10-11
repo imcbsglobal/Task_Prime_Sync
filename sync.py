@@ -43,9 +43,7 @@ class DatabaseConfig:
     @property
     def api_base_url(self): return self.config["api"]["base_url"]
     @property
-    def upload_endpoints(self): return self.config["api"]["upload_endpoints"]
-    @property
-    def api_timeout(self): return self.config["api"].get("timeout", 30)
+    def api_timeout(self): return self.config["api"].get("timeout", 120)  # Increased default to 120
     @property
     def client_id(self): return self.config["settings"]["client_id"]
     @property
@@ -77,9 +75,6 @@ class DatabaseConnector:
             print(f"❌ Failed to connect to database: {e}")
             return False
 
-    # ------------------------------------------------------------------
-    # NEW FETCHER (acc_tt_servicemaster)  -- 3 fields only
-    # ------------------------------------------------------------------
     def fetch_accttservicemaster(self) -> Optional[List[Dict[str, Any]]]:
         try:
             cursor = self.connection.cursor()
@@ -96,9 +91,6 @@ class DatabaseConnector:
             logging.error(f"❌ Failed fetching acc_tt_servicemaster: {e}")
             return None
 
-    # ------------------------------------------------------------------
-    # EXISTING FETCHERS (unchanged)
-    # ------------------------------------------------------------------
     def fetch_users(self) -> Optional[List[Dict[str, Any]]]:
         try:
             cursor = self.connection.cursor()
@@ -124,12 +116,17 @@ class DatabaseConnector:
             return None
 
     def fetch_acc_master(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetch acc_master records for DEBTO, SUNCR, CASH, BANK
+        Now includes super_code field
+        """
         try:
             cursor = self.connection.cursor()
             query = """
                 SELECT 
                     acc_master.code,
                     acc_master.name,
+                    acc_master.super_code,
                     acc_master.opening_balance,
                     acc_master.debit,
                     acc_master.credit,
@@ -142,22 +139,27 @@ class DatabaseConnector:
                     ON acc_master.openingdepartment = acc_departments.department_id
                 LEFT JOIN acc_tt_servicemaster
                     ON acc_master.area = acc_tt_servicemaster.code
-                WHERE acc_master.super_code = 'DEBTO';
+                WHERE acc_master.super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK');
             """
             logging.info(f"Executing query: {query}")
             cursor.execute(query)
             columns = [column[0] for column in cursor.description]
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
             
-            # Debug logging for area field
+            # Debug logging
             logging.info(f"📊 Fetched {len(results)} acc_master records")
+            
+            # Count by super_code
+            super_code_counts = {}
+            for r in results:
+                sc = r.get('super_code', 'None')
+                super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
+            
+            logging.info(f"📈 Records by super_code: {super_code_counts}")
+            
+            # Log area field statistics
             area_count = sum(1 for r in results if r.get('area') and str(r['area']).strip())
             logging.info(f"🔍 Records with non-empty area field: {area_count}")
-            
-            # Log first few area values for debugging
-            for i, record in enumerate(results[:5]):
-                area_value = record.get('area')
-                logging.info(f"🔎 Record {i+1} - Code: {record.get('code')}, Area: '{area_value}' (type: {type(area_value)})")
             
             return results
         except Exception as e:
@@ -166,6 +168,10 @@ class DatabaseConnector:
             return None
 
     def fetch_acc_ledgers(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetch acc_ledgers records for accounts with super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')
+        Now includes super_code field
+        """
         try:
             cursor = self.connection.cursor()
 
@@ -175,38 +181,47 @@ class DatabaseConnector:
             cursor.fetchall()
 
             # Debug: log a few code samples
-            logging.info("🧪 Debug: Sampling acc_master codes with DEBTO...")
-            cursor.execute("SELECT TOP 5 code FROM acc_master WHERE super_code = 'DEBTO'")
+            logging.info("🧪 Debug: Sampling acc_master codes with super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')...")
+            cursor.execute("SELECT TOP 5 code, super_code FROM acc_master WHERE super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')")
             for row in cursor.fetchall():
-                logging.info(f"🔎 acc_master code: [{row[0]}]")
+                logging.info(f"🔎 acc_master - code: [{row[0]}], super_code: [{row[1]}]")
 
             logging.info("🧪 Debug: Sampling acc_ledgers codes...")
             cursor.execute("SELECT TOP 5 code FROM acc_ledgers")
             for row in cursor.fetchall():
                 logging.info(f"🔎 acc_ledgers code: [{row[0]}]")
 
-            # Use IN instead of JOIN
+            # Use subquery with IN clause and include super_code
             query = """
                 SELECT
-                    code,
-                    particulars,
-                    debit,
-                    credit,
-                    entry_mode,
-                    "date" AS entry_date,
-                    voucher_no,
-                    narration
-                FROM acc_ledgers
-                WHERE TRIM(code) IN (
-                    SELECT TRIM(code) FROM acc_master WHERE TRIM(super_code) = 'DEBTO'
-                )
+                    l.code,
+                    l.particulars,
+                    l.debit,
+                    l.credit,
+                    l.entry_mode,
+                    l."date" AS entry_date,
+                    l.voucher_no,
+                    l.narration,
+                    m.super_code
+                FROM acc_ledgers l
+                INNER JOIN acc_master m ON TRIM(l.code) = TRIM(m.code)
+                WHERE TRIM(m.super_code) IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')
             """
 
-            logging.info("Trying simplified IN query...")
+            logging.info("Executing acc_ledgers query with super_code filter...")
             cursor.execute(query)
             columns = [col[0] for col in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
-            logging.info(f"✅ IN-query succeeded! Returned {len(result)} records")
+            
+            # Log statistics by super_code
+            super_code_counts = {}
+            for r in result:
+                sc = r.get('super_code', 'None')
+                super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
+            
+            logging.info(f"✅ Query succeeded! Returned {len(result)} records")
+            logging.info(f"📈 Records by super_code: {super_code_counts}")
+            
             return result
 
         except Exception as e:
@@ -297,6 +312,15 @@ class DatabaseConnector:
 
 
 class WebAPIClient:
+    # API Endpoints defined as class constants
+    ENDPOINT_USERS = "/upload-users/"
+    ENDPOINT_MISEL = "/upload-misel/"
+    ENDPOINT_ACC_MASTER = "/upload-acc-master/"
+    ENDPOINT_ACC_LEDGERS = "/upload-acc-ledgers/"
+    ENDPOINT_ACC_INVMAST = "/upload-acc-invmast/"
+    ENDPOINT_CASH_BANK = "/upload-cashandbankaccmaster/"
+    ENDPOINT_ACC_TT_SERVICE = "/upload-accttservicemaster/"
+
     def __init__(self, config: DatabaseConfig):
         self.config = config
         self.session = self._create_session()
@@ -310,11 +334,8 @@ class WebAPIClient:
         session.headers.update({'Content-Type': 'application/json'})
         return session
 
-    # ------------------------------------------------------------------
-    # NEW UPLOADER (acc_tt_servicemaster)
-    # ------------------------------------------------------------------
     def upload_accttservicemaster(self, rows: List[Dict[str, Any]]) -> bool:
-        url = f"{self.config.api_base_url}/upload-accttservicemaster/?client_id={self.config.client_id}"
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_TT_SERVICE}?client_id={self.config.client_id}"
         try:
             res = self.session.post(url, json=rows, timeout=self.config.api_timeout)
             if res.status_code in [200, 201]:
@@ -327,11 +348,8 @@ class WebAPIClient:
             logging.error(f"❌ Exception in upload_accttservicemaster: {e}")
             return False
 
-    # ------------------------------------------------------------------
-    # EXISTING UPLOADERS (unchanged)
-    # ------------------------------------------------------------------
     def upload_users(self, users: List[Dict[str, Any]]) -> bool:
-        url = f"{self.config.api_base_url}{self.config.upload_endpoints['users']}?client_id={self.config.client_id}"
+        url = f"{self.config.api_base_url}{self.ENDPOINT_USERS}?client_id={self.config.client_id}"
         try:
             res = self.session.post(url, json=users, timeout=self.config.api_timeout)
             if res.status_code in [200, 201]:
@@ -345,7 +363,7 @@ class WebAPIClient:
             return False
 
     def upload_misel(self, misel: List[Dict[str, Any]]) -> bool:
-        url = f"{self.config.api_base_url}{self.config.upload_endpoints['misel']}?client_id={self.config.client_id}"
+        url = f"{self.config.api_base_url}{self.ENDPOINT_MISEL}?client_id={self.config.client_id}"
         try:
             res = self.session.post(url, json=misel, timeout=self.config.api_timeout)
             if res.status_code in [200, 201]:
@@ -359,9 +377,20 @@ class WebAPIClient:
             return False
 
     def upload_acc_master(self, acc_master: List[Dict[str, Any]]) -> bool:
-        url = f"{self.config.api_base_url}{self.config.upload_endpoints['acc_master']}?client_id={self.config.client_id}&force_clear=true"
+        """Upload acc_master with batching support for large datasets"""
+        if not acc_master:
+            logging.warning("No acc_master data to upload")
+            return True
+        
+        # Use batching for large datasets (> 1000 records)
+        if len(acc_master) > 1000:
+            logging.info(f"📦 Large dataset detected ({len(acc_master)} records). Using batch upload...")
+            return self._upload_in_batches_with_clear('acc_master', acc_master, batch_size=200)
+        
+        # For smaller datasets, use single upload
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_MASTER}?client_id={self.config.client_id}&force_clear=true"
         try:
-            # For acc_master, always clear existing data first by sending empty array
+            # Clear existing data first
             logging.info("🧹 Clearing existing acc_master data...")
             clear_res = self.session.post(url, json=[], timeout=60)
             
@@ -369,9 +398,9 @@ class WebAPIClient:
                 logging.error(f"❌ Failed to clear existing acc_master data: {clear_res.status_code} - {clear_res.text}")
                 return False
             
-            # Now upload the new data
+            # Upload new data with extended timeout
             logging.info(f"📤 Uploading {len(acc_master)} acc_master records...")
-            res = self.session.post(url, json=acc_master, timeout=self.config.api_timeout)
+            res = self.session.post(url, json=acc_master, timeout=120)
             
             if res.status_code in [200, 201]:
                 logging.info("✅ Acc_Master uploaded successfully")
@@ -384,6 +413,70 @@ class WebAPIClient:
             logging.error(f"❌ Exception in upload_acc_master: {e}")
             return False
 
+    def _upload_in_batches_with_clear(self, table_name: str, data: List[Dict[str, Any]], batch_size: int = 500) -> bool:
+        """Upload large datasets in batches with initial clear operation"""
+        if not data:
+            return True
+        
+        # Map table names to endpoints
+        endpoint_map = {
+            'acc_master': self.ENDPOINT_ACC_MASTER,
+            'acc_ledgers': self.ENDPOINT_ACC_LEDGERS,
+            'acc_invmast': self.ENDPOINT_ACC_INVMAST
+        }
+        
+        endpoint = endpoint_map.get(table_name, self.ENDPOINT_ACC_MASTER)
+        total_records = len(data)
+        url = f"{self.config.api_base_url}{endpoint}?client_id={self.config.client_id}"
+        
+        # Clear existing data first
+        try:
+            logging.info(f"🧹 Clearing existing {table_name} data...")
+            clear_url = f"{url}&force_clear=true"
+            res = self.session.post(clear_url, json=[], timeout=60)
+            if res.status_code not in [200, 201]:
+                logging.error(f"❌ Failed to clear existing data: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception clearing data: {e}")
+            return False
+        
+        # Process in batches
+        success_count = 0
+        for i in range(0, total_records, batch_size):
+            batch = data[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            total_batches = (total_records + batch_size - 1) // batch_size
+            
+            try:
+                logging.info(f"📤 Uploading {table_name} batch {batch_num}/{total_batches} ({len(batch)} records)")
+                
+                # Calculate timeout based on batch size and table type
+                # acc_master needs more time per record due to complex joins/indexes
+                if table_name == 'acc_master':
+                    timeout = min(240, max(120, len(batch) * 0.5))  # 0.5s per record, min 120s, max 240s
+                else:
+                    timeout = min(180, max(60, len(batch) // 5))
+                
+                # Use append=true for subsequent batches
+                batch_url = f"{url}&append=true" if i > 0 else url
+                
+                res = self.session.post(batch_url, json=batch, timeout=timeout)
+                
+                if res.status_code in [200, 201]:
+                    success_count += len(batch)
+                    logging.info(f"✅ Batch {batch_num}/{total_batches} uploaded successfully")
+                else:
+                    logging.error(f"❌ Batch {batch_num} failed: {res.status_code} - {res.text}")
+                    return False
+                    
+            except Exception as e:
+                logging.error(f"❌ Exception in batch {batch_num}: {e}")
+                return False
+        
+        logging.info(f"✅ {table_name.title()} uploaded successfully ({success_count}/{total_records} records)")
+        return True
+
     def _upload_in_batches(self, endpoint_key: str, data: List[Dict[str, Any]], batch_size: int = None) -> bool:
         """Upload large datasets in batches to avoid timeouts"""
         if not data:
@@ -391,15 +484,22 @@ class WebAPIClient:
         
         if batch_size is None:
             batch_size = self.config.batch_size
-            
+        
+        # Map endpoint keys to actual endpoints
+        endpoint_map = {
+            'acc_ledgers': self.ENDPOINT_ACC_LEDGERS,
+            'acc_invmast': self.ENDPOINT_ACC_INVMAST
+        }
+        
+        endpoint = endpoint_map.get(endpoint_key, f"/upload-{endpoint_key}/")
         total_records = len(data)
-        url = f"{self.config.api_base_url}{self.config.upload_endpoints[endpoint_key]}?client_id={self.config.client_id}"
+        url = f"{self.config.api_base_url}{endpoint}?client_id={self.config.client_id}"
         
         # For large datasets, clear existing data first with empty batch
         if total_records > batch_size:
             try:
                 logging.info(f"🧹 Clearing existing {endpoint_key} data...")
-                res = self.session.post(url, json=[], timeout=60)  # Extended timeout for clearing
+                res = self.session.post(url, json=[], timeout=60)
                 if res.status_code not in [200, 201]:
                     logging.error(f"❌ Failed to clear existing data: {res.status_code} - {res.text}")
             except Exception as e:
@@ -415,13 +515,11 @@ class WebAPIClient:
             try:
                 logging.info(f"📤 Uploading {endpoint_key} batch {batch_num}/{total_batches} ({len(batch)} records)")
                 
-                # Use longer timeout for large batches
-                timeout = min(120, max(60, len(batch) // 10))
+                # Calculate timeout based on batch size
+                timeout = min(180, max(60, len(batch) // 5))
                 
-                # For first batch of large dataset, it will replace. For subsequent batches, we append
                 batch_url = url
                 if total_records > batch_size and i > 0:
-                    # Add append parameter for subsequent batches
                     batch_url = f"{url}&append=true"
                 
                 res = self.session.post(batch_url, json=batch, timeout=timeout)
@@ -444,10 +542,20 @@ class WebAPIClient:
         return self._upload_in_batches('acc_ledgers', acc_ledgers, self.config.large_table_batch_size)
 
     def upload_acc_invmast(self, acc_invmast: List[Dict[str, Any]]) -> bool:
-        # Small dataset, use direct upload
-        url = f"{self.config.api_base_url}{self.config.upload_endpoints['acc_invmast']}?client_id={self.config.client_id}"
+        """Upload acc_invmast with batching for large datasets"""
+        if not acc_invmast:
+            logging.warning("No acc_invmast data to upload")
+            return True
+        
+        # Use batching for datasets > 1000 records
+        if len(acc_invmast) > 1000:
+            logging.info(f"📦 Large dataset detected ({len(acc_invmast)} records). Using batch upload...")
+            return self._upload_in_batches_with_clear('acc_invmast', acc_invmast, batch_size=500)
+        
+        # For smaller datasets, use single upload with extended timeout
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_INVMAST}?client_id={self.config.client_id}"
         try:
-            res = self.session.post(url, json=acc_invmast, timeout=self.config.api_timeout)
+            res = self.session.post(url, json=acc_invmast, timeout=120)
             if res.status_code in [200, 201]:
                 logging.info("✅ AccInvmast uploaded successfully")
                 return True
@@ -459,8 +567,18 @@ class WebAPIClient:
             return False
 
     def upload_cashandbankaccmaster(self, cashandbankaccmaster: List[Dict[str, Any]]) -> bool:
-        url = f"{self.config.api_base_url}{self.config.upload_endpoints['cashandbankaccmaster']}?client_id={self.config.client_id}"
+        url = f"{self.config.api_base_url}{self.ENDPOINT_CASH_BANK}?client_id={self.config.client_id}"
         try:
+            # Clear existing data first to avoid duplicate key errors
+            logging.info("🧹 Clearing existing cashandbankaccmaster data...")
+            clear_url = f"{url}&force_clear=true"
+            clear_res = self.session.post(clear_url, json=[], timeout=60)
+            
+            if clear_res.status_code not in [200, 201]:
+                logging.error(f"❌ Failed to clear existing data: {clear_res.status_code} - {clear_res.text}")
+                # Continue anyway, the view might handle it
+            
+            # Upload new data
             res = self.session.post(url, json=cashandbankaccmaster, timeout=self.config.api_timeout)
             if res.status_code in [200, 201]:
                 logging.info("✅ CashAndBankAccMaster uploaded successfully")
@@ -497,9 +615,6 @@ class SyncTool:
             logging.error(f"Initialization failed: {e}")
             return False
 
-    # ------------------------------------------------------------------
-    # NEW VALIDATOR (acc_tt_servicemaster)
-    # ------------------------------------------------------------------
     def validate_accttservicemaster_data(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid = []
         for r in rows:
@@ -514,9 +629,6 @@ class SyncTool:
                 continue
         return valid
 
-    # ------------------------------------------------------------------
-    # EXISTING VALIDATORS (unchanged)
-    # ------------------------------------------------------------------
     def validate_user_data(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid_users = []
         for i, user in enumerate(users):
@@ -549,39 +661,55 @@ class SyncTool:
         return valid
 
     def validate_acc_master_data(self, acc_master: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Validate acc_master data - now includes super_code field
+        """
         valid = []
         for i, m in enumerate(acc_master):
             if not m.get('code'):
                 continue
             
-            # Handle area field properly - don't skip 'No Area' values
+            # Handle area field properly
             area_value = m.get('area', '')
             if area_value and area_value != 'No Area':
                 area_clean = str(area_value).strip()
             else:
-                area_clean = None  # Set to None instead of empty string for 'No Area'
+                area_clean = None
+            
+            # Handle super_code field
+            super_code = str(m.get('super_code', '')).strip() if m.get('super_code') else None
             
             validated_record = {
                 'code': str(m['code']).strip(),
                 'name': str(m.get('name', '')).strip() if m.get('name') else '',
+                'super_code': super_code,
                 'opening_balance': float(m['opening_balance']) if m.get('opening_balance') is not None else None,
                 'debit': float(m['debit']) if m.get('debit') is not None else None,
                 'credit': float(m['credit']) if m.get('credit') is not None else None,
                 'place': str(m.get('place', '')).strip() if m.get('place') else '',
                 'phone2': str(m.get('phone2', '')).strip() if m.get('phone2') else '',
                 'openingdepartment': str(m.get('openingdepartment', '')).strip() if m.get('openingdepartment') else '',
-                'area': area_clean  # Fixed: properly handle area field
+                'area': area_clean
             }
             
             valid.append(validated_record)
             
         # Debug logging
         area_count = sum(1 for r in valid if r.get('area'))
+        super_code_counts = {}
+        for r in valid:
+            sc = r.get('super_code', 'None')
+            super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
+        
         logging.info(f"📊 After validation - Records with area data: {area_count}/{len(valid)}")
+        logging.info(f"📊 After validation - Records by super_code: {super_code_counts}")
         
         return valid
 
     def validate_acc_ledgers_data(self, acc_ledgers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Validate acc_ledgers data - now includes super_code field
+        """
         valid = []
         for i, l in enumerate(acc_ledgers):
             if not l.get('code'):
@@ -593,13 +721,11 @@ class SyncTool:
                     if hasattr(l['entry_date'], 'strftime'):
                         entry_date = l['entry_date'].strftime('%Y-%m-%d')
                     elif isinstance(l['entry_date'], str):
-                        # Try to parse string date
                         from datetime import datetime
                         try:
                             parsed_date = datetime.strptime(l['entry_date'], '%Y-%m-%d')
                             entry_date = parsed_date.strftime('%Y-%m-%d')
                         except ValueError:
-                            # Try other common formats
                             for fmt in ['%d/%m/%Y', '%m/%d/%Y', '%Y/%m/%d']:
                                 try:
                                     parsed_date = datetime.strptime(l['entry_date'], fmt)
@@ -638,6 +764,9 @@ class SyncTool:
             except (ValueError, TypeError):
                 credit = None
             
+            # Handle super_code field
+            super_code = str(l.get('super_code', '')).strip() if l.get('super_code') else None
+            
             valid.append({
                 'code': str(l['code']).strip(),
                 'particulars': l.get('particulars', ''),
@@ -646,14 +775,23 @@ class SyncTool:
                 'entry_mode': l.get('entry_mode', ''),
                 'entry_date': entry_date,
                 'voucher_no': voucher_no,
-                'narration': l.get('narration', '')
+                'narration': l.get('narration', ''),
+                'super_code': super_code
             })
+        
+        # Debug logging
+        super_code_counts = {}
+        for r in valid:
+            sc = r.get('super_code', 'None')
+            super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
+        
+        logging.info(f"📊 After validation - Records by super_code: {super_code_counts}")
+        
         return valid
 
     def validate_acc_invmast_data(self, acc_invmast: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid = []
         for i, inv in enumerate(acc_invmast):
-            # Handle date conversion
             invdate = None
             if inv.get('invdate'):
                 try:
@@ -664,7 +802,6 @@ class SyncTool:
                 except Exception:
                     invdate = None
             
-            # Handle numeric fields safely
             nettotal = None
             paid = None
             try:
@@ -706,9 +843,6 @@ class SyncTool:
             })
         return valid
 
-    # ------------------------------------------------------------------
-    # RUN METHOD  (only the new block added before close())
-    # ------------------------------------------------------------------
     def run(self) -> bool:
         print("🔄 Starting SQL Anywhere to Web API sync...")
         if not self.initialize():
@@ -736,30 +870,48 @@ class SyncTool:
             else:
                 print("❌ No valid misel data")
 
-        # Sync AccMaster (with enhanced area field processing)
+        # Sync AccMaster (with super_code field)
         acc_master = self.db_connector.fetch_acc_master()
         if acc_master:
             print(f"📊 Found {len(acc_master)} acc_master entries")
             valid_acc_master = self.validate_acc_master_data(acc_master)
             if valid_acc_master:
-                # Log area field statistics before upload
+                # Log statistics
+                super_code_counts = {}
+                for r in valid_acc_master:
+                    sc = r.get('super_code', 'None')
+                    super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
+                
+                print(f"📈 Records by super_code: {super_code_counts}")
+                
                 area_records = [r for r in valid_acc_master if r.get('area')]
                 print(f"📊 Records with area data: {len(area_records)}/{len(valid_acc_master)}")
                 
-                # Show sample area values
                 if area_records:
                     sample_areas = [r['area'] for r in area_records[:5]]
                     print(f"🔍 Sample area values: {sample_areas}")
                 
-                self.api_client.upload_acc_master(valid_acc_master)
+                # CRITICAL: Stop if acc_master upload fails
+                if not self.api_client.upload_acc_master(valid_acc_master):
+                    print("❌ CRITICAL: acc_master upload failed! Stopping sync.")
+                    self.db_connector.close()
+                    return False
             else:
                 print("❌ No valid acc_master data")
 
-        # Sync AccLedgers
+        # Sync AccLedgers (with super_code field)
         acc_ledgers = self.db_connector.fetch_acc_ledgers()
         if acc_ledgers is not None:
             if acc_ledgers:
                 print(f"📊 Found {len(acc_ledgers)} acc_ledgers entries")
+                
+                # Log statistics by super_code
+                super_code_counts = {}
+                for r in acc_ledgers:
+                    sc = r.get('super_code', 'None')
+                    super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
+                print(f"📈 Ledgers by super_code: {super_code_counts}")
+                
                 valid_acc_ledgers = self.validate_acc_ledgers_data(acc_ledgers)
                 if valid_acc_ledgers:
                     self.api_client.upload_acc_ledgers(valid_acc_ledgers)
@@ -795,9 +947,7 @@ class SyncTool:
             else:
                 print("❌ No valid cashandbankaccmaster data")
 
-        # ------------------------------------------------------------------
-        # NEW SYNC BLOCK (acc_tt_servicemaster)
-        # ------------------------------------------------------------------
+        # Sync acc_tt_servicemaster
         acctt = self.db_connector.fetch_accttservicemaster()
         if acctt:
             print(f"📊 Found {len(acctt)} acc_tt_servicemaster rows")
